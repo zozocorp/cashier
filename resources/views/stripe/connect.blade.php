@@ -3,7 +3,7 @@
         <title>{{ trans('cashier::messages.stripe.transaction.payment') }}</title>
         <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
         <script type="text/javascript" src="https://code.jquery.com/jquery-3.4.1.min.js"></script>            
-        <link rel="stylesheet" href="{{ \Worker\Cashier\Cashier::public_url('/vendor/acelle-cashier/css/main.css') }}">
+        <link rel="stylesheet" href="{{ \Worker\Cashier\Cashier::public_url('/vendor/worker-cashier/css/main.css') }}">
     </head>
     
     <body>
@@ -15,7 +15,7 @@
                         {{ trans('cashier::messages.stripe.payment') }}
                     </strong>
                 </label>
-                <img class="rounded" width="100%" src="{{ \Worker\Cashier\Cashier::public_url('/vendor/acelle-cashier/image/stripe.png') }}" />
+                <img class="rounded" width="100%" src="{{ \Worker\Cashier\Cashier::public_url('/vendor/worker-cashier/image/stripe.png') }}" />
             </div>
             <div class="col-md-4 mt-40 pd-60">
                 

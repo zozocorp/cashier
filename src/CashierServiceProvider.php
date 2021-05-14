@@ -30,8 +30,13 @@ class CashierServiceProvider extends ServiceProvider
         
         // assets
         $this->publishes([
-            __DIR__.'/../assets' => public_path('vendor/acelle-cashier'),
+            __DIR__.'/../assets' => public_path('vendor/ema-cashier'),
         ], 'public');
+        
+        // publish config
+        $this->publishes([
+        __DIR__.'/../config/cashier.php' => config_path('cashier.php'),
+    ]);
     }
 
     /**
@@ -41,5 +46,8 @@ class CashierServiceProvider extends ServiceProvider
      */
     public function register()
     {
+        $this->mergeConfigFrom(
+        __DIR__.'/../config/cashier.php', 'cashier'
+    );
     }
 }

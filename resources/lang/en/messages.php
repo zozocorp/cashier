@@ -1,21 +1,4 @@
-<?php return array(
-    'change_plan.warning' => 'You have a change plan invoice.
-        Click <a href=":link">here</a> to checkout the invoice.',
-    'invoice.subscription.change_plan_pending' => 'There are change plan invoice with amount: <strong>:amount</strong>.
-        <br><a href=":url"><strong>Click here</strong></a> to see more details.',
-    'invoice.subscription.renew_pending' => 'There are renew invoice with amount: <strong>:amount</strong>.
-        <br><a href=":url"><strong>Click here</strong></a> to see more details.',
-
-    'direct.invoice.pay_invoice' => 'Pay Invoice',
-    'direct.invoice.pay_invoice.intro' => 'You have a pending invoice with billing
-        amount is <strong>:amount</strong>. Please make the payment following the guideline bellow.',
-    'direct.invoice.claimed' => 'Invoice payment claimed.',
-    'direct.invoice.claimed.intro' => '<p>Thanks for your payment. Please wait for the payment confirmation.<br>
-        Normally it may take 1 - 2 days for subscription to be reviewed and approved. Should you have any question, please contact us at:<br>
-        - <strong>mobile</strong>: +88900200300<br>
-        - <strong>Email</strong>: admin@acellemail.com</p>',
-
-    'invoice.item_list' => 'Item List',
+<?php return array (
     'stripe.checkout.page_title' => 'Checkout',
     'stripe.checkout_with_stripe' => 'Checkout with Stripe',
     'stripe.card_list' => 'Your card information',
@@ -47,7 +30,7 @@
     'stripe.invoice.subscription_threshold' => 'Billing threshold being reached',
     'stripe.has_transaction_pending' => 'There are pending transaction.
         <br><a href=":url"><strong>Click here</strong></a> to see more details.',
-    'braintree.cancel_subscription' => 'Click here to cancel the transaction. This can not be undone.',
+    'braintree.cancel_subscription' => 'Click here to cancel the transaction. This can be undone.',
     'braintree.pending.intro' => 'There is a pending transaction. Please wait for validating your payment.',
     'braintree.pending.page_title' => 'Transaction is pending',
     'braintree.checkout.page_title' => 'Checkout',
@@ -70,7 +53,7 @@
         Please wait for the payment confirmation.</p>
         <p>Normally it may take 1 - 2 days for subscription to be reviewed and approved. Should you have any question, please contact us at:<br>
         - <strong>mobile</strong>: +88900200300<br>
-        - <strong>Email</strong>: admin@acellemail.com</p>
+        - <strong>Email</strong>: admin@emamail.com</p>
         ',
     'direct.payment_instruction.demo' => '
         <p>Please make a deposit to our bank account at:</p>
@@ -115,7 +98,7 @@
     'coinpayments.renew_plan.intro' => 'You are about to renew :plan plan. Please check the renew information below before proceeding.',
     'coinpayments.checkout.page_title' => 'Checkout',
     'coinpayments.title' => 'Checkout',
-    'coinpayments.checkout.intro' => 'You are paying invoice with <strong>:price</strong>.
+    'coinpayments.checkout.intro' => 'You are checking out <strong>:plan</strong> with <strong>:price</strong>.
         Please click the button bellow to proceed with the payment information.',
     'coinpayments.subscribe_to_plan' => 'Subscribe to plan <strong>:plan</strong>',
     'coinpayments.pay_now' => 'Pay now',
@@ -143,8 +126,9 @@
     'direct.plan' => 'Plan',
     'direct.description' => 'Description',
     'direct.amount' => 'Amount',
-    'direct.pending.intro' => 'You have a pending invoice with billing
-        amount is <strong>:amount</strong>. Please make the payment following the guideline bellow.',
+    'direct.pending.intro' => 'Thank you for subscribing to our <strong>:plan</strong> plan, your billing
+        amount is <strong>:price</strong>. Please make the payment following the guideline bellow and your
+        subscription will be activated quickly.',
     'coinpayments.plan' => 'Plan',
     'coinpayments.next_period_day' => 'Next period end day',
     'coinpayments.amount' => 'Amount',
@@ -195,8 +179,8 @@
     'stripe.resume_plan' => 'Resume <strong>:plan</strong> plan',
     'stripe.cancel_now_plan' => 'Cancel now <strong>:plan</strong> plan',
     'paypal.title' => 'Pay with PayPal',
-    'paypal.checkout.intro' => 'You are paying an invoice with amount <strong>:price</strong>.
-        Click on the button below to finish your payment with PayPal before using plan.',
+    'paypal.checkout.intro' => 'You are checking out <strong>:plan</strong> with <strong>:price</strong>.
+        Click on the button below to finish your payment with PayPal before using plan.',    
     'paypal.subscribe_to_plan' => 'Subscribe to plan <strong>:plan</strong>',
     'paypal.new_plan' => 'New plan',
     'paypal.change_plan' => 'Change plan',
@@ -253,10 +237,10 @@
     'coinpayments.checkout_url' => 'Checkout URL',
     'coinpayments.status_url' => 'Status URL',
     'coinpayments.status' => 'Status',
-    'coinpayments.pending.intro' => 'You are paying an invoice.
+    'coinpayments.pending.intro' => 'You are subscribing to <strong>:plan</strong> plan.
         Click on the <strong>checkout url</strong> to pay or <strong>status url</strong> below to pay/check your payment status',
     'subscription.log.subscribe' => 'Subscribing to <strong>:plan</strong> plan',
-    'subscription.log.claimed' => 'The payment was <strong>claimed</strong> by customer',
+    'subscription.log.claimed' => 'The payment (<strong>:price</strong>) was <strong>claimed</strong> by customer',
     'subscription.log.admin_approved' => 'Subscription for <strong>:plan</strong> plan was
         <strong>approved</strong> by Admin',
     'subscription.log.admin_cancelled_now' => 'Subscription for <strong>:plan</strong> plan was
@@ -272,7 +256,7 @@
     'subscription.log.cancelled' => 'Subscription for <strong>:plan</strong> plan was <strong>cancelled</strong>',
     'subscription.log.resumed' => 'Subscription for <strong>:plan</strong> plan was <strong>resumed</strong>',
     'subscription.log.plan_changed' => 'Changed plan to
-        <strong>:plan</strong>',
+        <strong>:plan</strong> (<strong>:price</strong>)',
     'subscription.log.renewed' => 'Renewed <strong>:plan</strong> plan (<strong>:price</strong>)',
     'subscription.log.renew_failed' => 'Can not renew <strong>:plan</strong> plan. Error: :error',
     'subscription.log.expired' => 'Subscription for <strong>:plan</strong> plan was <strong>expired</strong>',
@@ -416,7 +400,7 @@
     'razorpay.next_period_day' => 'Next period end day',
     'razorpay.amount' => 'Amount',
     'razorpay.next_period_day' => 'Next period end day',
-    'razorpay.checkout.intro' => 'You are paying an invoice with amount <strong>:price</strong>.
+    'razorpay.checkout.intro' => 'You are checking out <strong>:plan</strong> with <strong>:price</strong>.
         Please click the button bellow to proceed with the payment information.',
     'razorpay.pay_with_razorpay' => 'Pay with Razorpay',
 
@@ -460,14 +444,14 @@
     'charge.something_went_wrong' => 'Something went wrong while charging: :error',
     'renew.error' => 'Something went wrong when renewing your subscription. Please contact admin for more information.',
     'renew.card_error' => 'Something went wrong with the payment when renewing your subscription. Error: :error.
-        <a href=":link"><strong>Click here</strong></a> to check the payment.',
+        <a href=":link"><strong>Click here</strong></a> to update the payment.',
     'renew_pending' => 'You are renewing <strong>:plan</strong> plan with amount: <strong>:amount</strong>.
         <br><a href=":url"><strong>Click here</strong></a> to see more details.',
     'change_plan_pending' => 'You are changing to <strong>:plan</strong> plan with amount: <strong>:amount</strong>.
         <br><a href=":url"><strong>Click here</strong></a> to see more details.',
     'change_plan.failed' => 'Can not change plan: :error',
     'paystack.checkout_with_paystack' => 'Pay with Paystack',
-    'paystack.click_bellow_to_pay' => 'You are paying an invoice with amount <strong>:price</strong>.
+    'paystack.click_bellow_to_pay' => 'You are checking out <strong>:plan</strong> with Stripe with <strong>:price</strong>.
         Please click the button bellow to proceed with the payment information.',
     'paystack.pay' => 'Pay Now',
     'paystack.checkout.processing_payment.intro' => 'This process is automatic. Please do not close this browser/tab or change page.
@@ -487,27 +471,4 @@
     'paystack.pay_with_new_card' => 'Pay with new card',
     'paystack.pay_with_this_card' => 'Pay with this card',
     'paystack.cancel_new_subscription' => 'Click here to choose another plan',
-    'gateway_not_found' => 'Can not found customer payment method',
-    'stripe.use_current_card' => 'Use current card',
-    'stripe.change_card' => 'Change card',
-    'stripe.connected' => 'You connected to Stripe successfully',
-    'stripe.click_button_to_connect' => 'Click button below to add payment method',
-    'stripe.add_card' => 'Add card',
-    'direct.connected.thanks' => 'Thank you! <br>Direct payment method was set',
-    'direct.connected.intro' => 'Make payment outside of application',
-    'braintree.use_new_card' => 'Use new card',
-    'braintree.new_card' => 'New card',
-    'braintree.use_this_card' => 'Use this card',
-    'braintree.connected' => 'You connected to Stripe successfully',
-    'coinpayments.connected.thanks' => 'Thank you! <br>Coinpayments method was set',
-    'coinpayments.connected.intro' => 'Make payment using degital coins',
-    'razorpay.connected.thanks' => 'Thank you! <br>Razorpay payment method was set',
-    'razorpay.connected.intro' => 'Make payment outside of application',
-    'paypal.connected.thanks' => 'Thank you! <br>Paypal payment method was set',
-    'paypal.connected.intro' => 'Make payment outside of application',
-    'coinpayments.cancel_subscription' => 'Click here to cancel this subscription. This can not be undone',
-    'razorpay.cancel_subscription' => 'Click here to cancel the transaction. This can not be undone.',
-    'subscription.log.plan_change_canceled' => 'Change plan invoice was canceled',
-    'coinpayments.status_code' => 'Status code',
-    'transaction.method.razorpay' => 'Razorpay',
-);
+) ?>

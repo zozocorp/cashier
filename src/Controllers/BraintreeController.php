@@ -3,17 +3,22 @@
 namespace Worker\Cashier\Controllers;
 
 use Worker\Http\Controllers\Controller;
+use Worker\Cashier\Subscription;
+use Worker\Cashier\SubscriptionTransaction;
+use Worker\Cashier\SubscriptionLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log as LaravelLog;
 use Worker\Cashier\Cashier;
 use Worker\Cashier\Services\BraintreePaymentGateway;
 
-use \Worker\Model\Invoice;
-
 class BraintreeController extends Controller
 {
-    public function getReturnUrl(Request $request)
-    {
+    /**
+     * Get return url.
+     *
+     * @return string
+     **/
+    public function getReturnUrl(Request $request) {
         $return_url = $request->session()->get('checkout_return_url', Cashier::public_url('/'));
         if (!$return_url) {
             $return_url = Cashier::public_url('/');
@@ -29,7 +34,7 @@ class BraintreeController extends Controller
      **/
     public function getPaymentService()
     {
-        return \Worker\Model\Setting::getPaymentGateway('braintree');
+        return Cashier::getPaymentGateway('braintree');
     }
 
     /**
@@ -38,49 +43,438 @@ class BraintreeController extends Controller
      * @param \Illuminate\Http\Request $request
      *
      * @return \Illuminate\Http\Response
-    **/
-    public function checkout(Request $request, $invoice_uid)
+     **/
+    public function checkout2(Request $request, $subscription_id)
     {
-        $customer = $request->user()->customer;
+        $subscription = Subscription::findByUid($subscription_id);
         $service = $this->getPaymentService();
-        $invoice = Invoice::findByUid($invoice_uid);
+        
+        // Save return url
+        if ($request->return_url) {
+            $request->session()->put('checkout_return_url', $request->return_url);
+        }
+        
+        $clientToken = $service->serviceGateway->clientToken()->generate();
+        
+        $cardInfo = $service->getCardInformation($subscription->user);
+        
+        //$tid = $service->getTransaction($subscription)['id'];
+        //var_dump($service->serviceGateway->transaction()->find($tid));
+        //die();
+        
+        return view('cashier::braintree.checkout', [
+            'gatewayService' => $service,
+            'subscription' => $subscription,
+            'clientToken' => $clientToken,
+            'cardInfo' => $cardInfo,
+        ]);
+    }
+    
+    /**
+     * Subscription checkout page.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function checkout(Request $request, $subscription_id)
+    {
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
         
         // Save return url
         if ($request->return_url) {
             $request->session()->put('checkout_return_url', $request->return_url);
         }
 
-        // not waiting
-        if (!$invoice->pendingTransaction() || $invoice->isPaid()) {
+        // if subscription is active
+        if ($subscription->isActive() || $subscription->isEnded()) {
             return redirect()->away($this->getReturnUrl($request));
         }
 
-        // free plan. No charge
-        if ($invoice->total() == 0) {
-            $invoice->fulfill();
+        // if free plan
+        if ($subscription->plan->getBillableAmount() == 0 && $service->always_ask_for_valid_card == 'no') {
+            // charged successfully. Set subscription to active
+            $subscription->start();
 
+            // add transaction
+            $subscription->addTransaction(SubscriptionTransaction::TYPE_SUBSCRIBE, [
+                'ends_at' => $subscription->ends_at,
+                'current_period_ends_at' => $subscription->current_period_ends_at,
+                'status' => SubscriptionTransaction::STATUS_SUCCESS,
+                'title' => trans('cashier::messages.transaction.subscribed_to_plan', [
+                    'plan' => $subscription->plan->getBillableName(),
+                ]),
+                'amount' => $subscription->plan->getBillableFormattedPrice()
+            ]);
+
+            // Redirect to my subscription page
             return redirect()->away($this->getReturnUrl($request));
         }
 
-        // Customer has no card
-        if (!$service->hasCard($customer)) {
-            // connect again
-            return redirect()->away(
-                $service->getConnectUrl(
-                    $service->getCheckoutUrl($invoice, $this->getReturnUrl($request))
-                )
-            );
+        return view('cashier::braintree.checkout', [
+            'service' => $service,
+            'subscription' => $subscription,
+            'clientToken' => $service->serviceGateway->clientToken()->generate(),
+            'cardInfo' => $service->getCardInformation($subscription->user),
+        ]);
+    }
+    
+    /**
+     * Update customer card.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function updateCard(Request $request, $subscription_id)
+    {
+        // subscription and service
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        
+        // update card
+        $service->updateCard($subscription->user, $request->nonce);
+        
+        // charge url
+        if ($request->charge_url) {
+            return redirect()->away($request->charge_url);
         }
+        
+        return redirect()->away($request->redirect);
+    }
+    
+    /**
+     * Subscription charge.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function charge(Request $request, $subscription_id)
+    {
+        // subscription and service
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        $return_url = $request->session()->get('checkout_return_url', Cashier::public_url('/'));
 
         if ($request->isMethod('post')) {
-            $result = $service->charge($invoice);
+            // add transaction
+            $transaction = $subscription->addTransaction(SubscriptionTransaction::TYPE_SUBSCRIBE, [
+                'ends_at' => $subscription->ends_at,
+                'current_period_ends_at' => $subscription->current_period_ends_at,
+                'status' => SubscriptionTransaction::STATUS_PENDING,
+                'title' => trans('cashier::messages.transaction.subscribed_to_plan', [
+                    'plan' => $subscription->plan->getBillableName(),
+                ]),
+                'amount' => $subscription->plan->getBillableFormattedPrice()
+            ]);
+            
+            if ($subscription->plan->getBillableAmount() > 0) {
+                try {
+                    // charge customer
+                    $service->charge($subscription, [
+                        'amount' => $subscription->plan->getBillableAmount(),
+                        'currency' => $subscription->plan->getBillableCurrency(),
+                        'description' => trans('cashier::messages.transaction.subscribed_to_plan', [
+                            'plan' => $subscription->plan->getBillableName(),
+                        ]),
+                    ]);
+                } catch (\Exception $e) {
+                    // charged successfully. Set subscription to active
+                    $subscription->cancelNow();
 
-            // return back
+                    // transaction success
+                    $transaction->description = trans('cashier::messages.charge.something_went_wrong', ['error' => $e->getMessage()]);
+                    $transaction->setFailed();
+
+                    // add log
+                    $subscription->addLog(SubscriptionLog::TYPE_ERROR, [
+                        'plan' => $subscription->plan->getBillableName(),
+                        'price' => $subscription->plan->getBillableFormattedPrice(),
+                        'message' => $e->getMessage(),
+                    ]);
+
+                    // Redirect to my subscription page
+                    $request->session()->flash('alert-error', trans('cashier::messages.charge.something_went_wrong', ['error' => $e->getMessage()]));
+                    return redirect()->away($this->getReturnUrl($request));
+                }
+            }
+
+            // charged successfully. Set subscription to active
+            $subscription->start();
+
+            // transaction success
+            $transaction->setSuccess();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_PAID, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+            ]);
+            sleep(1);
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_SUBSCRIBED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+            ]);
+
+            // Redirect to my subscription page
             return redirect()->away($this->getReturnUrl($request));
         }
 
-        return view('cashier::braintree.charging', [
-            'invoice' => $invoice,
+        return view('cashier::braintree.charge', [
+            'subscription' => $subscription,
+        ]);
+    }
+    
+    /**
+     * Subscription pending page.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function pending(Request $request, $subscription_id)
+    {
+        $service = $this->getPaymentService();
+        $subscription = Subscription::findByUid($subscription_id);
+        $transaction = $service->getTransaction($subscription);
+        
+        $service->sync($subscription);
+        
+        $return_url = $request->session()->get('checkout_return_url', Cashier::public_url('/'));
+        if (!$return_url) {
+            $return_url = Cashier::public_url('/');
+        }
+        
+        if (!$subscription->isPending()) {
+            return redirect()->away($return_url);
+        }
+        
+        return view('cashier::braintree.pending', [
+            'gatewayService' => $service,
+            'subscription' => $subscription,
+            'transaction' => $transaction,
+            'return_url' => $return_url,
+        ]);
+    }
+    
+    /**
+     * Renew subscription.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function changePlan(Request $request, $subscription_id)
+    {
+        // Get current customer
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        $cardInfo = $service->getCardInformation($subscription->user);
+        
+        // @todo dependency injection
+        $plan = \Worker\Model\Plan::findByUid($request->plan_id);        
+        
+        // Save return url
+        if ($request->return_url) {
+            $request->session()->put('checkout_return_url', $request->return_url);
+        }
+
+        // calc plan before change
+        try {
+            $result = Cashier::calcChangePlan($subscription, $plan);
+        } catch (\Exception $e) {
+            $request->session()->flash('alert-error', trans('cashier::messages.change_plan.failed', ['error' => $e->getMessage()]));
+            return redirect()->away($this->getReturnUrl($request));
+        }
+        
+        if ($request->isMethod('post')) {
+            // add transaction
+            $transaction = $subscription->addTransaction(SubscriptionTransaction::TYPE_PLAN_CHANGE, [
+                'ends_at' => $subscription->ends_at,
+                'current_period_ends_at' => $subscription->current_period_ends_at,
+                'status' => SubscriptionTransaction::STATUS_PENDING,
+                'title' => trans('cashier::messages.transaction.change_plan', [
+                    'plan' => $plan->getBillableName(),
+                ]),
+                'amount' => $result['amount'],
+            ]);
+
+            // charge customer
+            if ($result['amount'] > 0) {
+                try {
+                    // charge customer
+                    $service->charge($subscription, [
+                        'amount' => $result['amount'],
+                        'currency' => $plan->getBillableCurrency(),
+                        'description' => trans('cashier::messages.transaction.change_plan', [
+                            'plan' => $plan->getBillableName(),
+                        ]),
+                    ]);
+                } catch (\Exception $e) {
+                    // set transaction failed
+                    $transaction->description = $e->getMessage();
+                    $transaction->setFailed();
+
+                    // add log
+                    $subscription->addLog(SubscriptionLog::TYPE_PLAN_CHANGE_FAILED, [
+                        'old_plan' => $subscription->plan->getBillableName(),
+                        'plan' => $plan->getBillableName(),
+                        'price' => $result['amount'],
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    // set subscription last_error_type
+                    $subscription->error = json_encode([
+                        'status' => 'error',
+                        'type' => 'change_plan_failed',
+                        'message' => trans('cashier::messages.change_plan_failed_with_error', [
+                            'error' => $e->getMessage(),
+                        ]),
+                    ]);
+                    $subscription->save();
+
+                    // Redirect to my subscription page
+                    return redirect()->away($this->getReturnUrl($request));
+                }
+            }
+            
+            // change plan
+            $subscription->changePlan($plan);
+
+            // set success
+            $transaction->setSuccess();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_PLAN_CHANGED, [
+                'old_plan' => $subscription->plan->getBillableName(),
+                'plan' => $plan->getBillableName(),
+                'price' => $plan->getBillableFormattedPrice(),
+            ]);
+            
+            // remove last_error
+            $subscription->error = null;
+            $subscription->save();
+
+            // Redirect to my subscription page
+            return redirect()->away($this->getReturnUrl($request));
+        }
+        
+        return view('cashier::braintree.change_plan', [
+            'service' => $service,
+            'subscription' => $subscription,
+            'newPlan' => $plan,
+            'return_url' => $request->return_url,
+            'nextPeriodDay' => $result['endsAt'],
+            'amount' => $result['amount'],
+            'cardInfo' => $cardInfo,
+            'clientToken' => $service->serviceGateway->clientToken()->generate(),
+        ]);
+    }
+    
+    /**
+     * Change subscription plan pending page.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function changePlanPending(Request $request, $subscription_id)
+    {
+        // Get current customer
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        
+        return view('cashier::braintree.change_plan_pending', [
+            'subscription' => $subscription,
+            'plan_id' => $request->plan_id,
+        ]);
+    }
+    
+    /**
+     * Cancel new subscription.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function cancelNow(Request $request, $subscription_id)
+    {
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+
+        if ($subscription->isNew()) {
+            $subscription->setEnded();
+        }
+
+        $return_url = $request->session()->get('checkout_return_url', Cashier::public_url('/'));
+        if (!$return_url) {
+            $return_url = Cashier::public_url('/');
+        }
+
+        // Redirect to my subscription page
+        return redirect()->away($return_url);
+    }
+    
+    /**
+     * Renew subscription.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function renew(Request $request, $subscription_id)
+    {
+        // Get current customer
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        
+        
+        // Save return url
+        if ($request->return_url) {
+            $request->session()->put('checkout_return_url', $request->return_url);
+        }
+        
+        if ($request->isMethod('post')) {
+            // subscribe to plan
+            $service->renew($subscription);
+
+            // Redirect to my subscription page
+            return redirect()->away(Cashier::lr_action('\Worker\Cashier\Controllers\BraintreeController@pending', [
+                'subscription_id' => $subscription->uid,
+            ]));
+        }
+        
+        // card info
+        $cardInfo = $service->getCardInformation($subscription->user);
+        $clientToken = $service->serviceGateway->clientToken()->generate();
+        
+        return view('cashier::braintree.renew', [
+            'service' => $service,
+            'subscription' => $subscription,
+            'return_url' => $request->return_url,
+            'cardInfo' => $cardInfo,
+            'clientToken' => $clientToken,
+        ]);
+    }
+    
+    /**
+     * Change subscription plan pending page.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function renewPending(Request $request, $subscription_id)
+    {
+        // Get current customer
+        $subscription = Subscription::findByUid($subscription_id);
+        $service = $this->getPaymentService();
+        
+        return view('cashier::braintree.renew_pending', [
+            'subscription' => $subscription,
         ]);
     }
 
@@ -91,43 +485,45 @@ class BraintreeController extends Controller
      *
      * @return \Illuminate\Http\Response
      **/
-    public function connect(Request $request)
+    public function fixPayment(Request $request, $subscription_id)
     {
         // Get current customer
+        $subscription = Subscription::findByUid($subscription_id);
         $service = $this->getPaymentService();
-
-        // Save return url
-        if ($request->return_url) {
-            $request->session()->put('checkout_return_url', $request->return_url);
-        }
-
-        // get card
-        $card = $service->getCardInformation($request->user()->customer);
         
         if ($request->isMethod('post')) {
-            if (!$request->use_current_card) {
-                // update card
-                $service->updateCard($request->user()->customer, $request->nonce);
+            // try to renew again
+            $ok = $service->renew($subscription);
+
+            if ($ok) {
+                // remove last_error
+                $subscription->error = null;
+                $subscription->save();
             }
 
-            // set gateway
-            $card = $service->getCardInformation($request->user()->customer);
-            $request->user()->customer->updatePaymentMethod([
-                'method' => 'braintree',
-                'user_id' => $request->user()->customer->getBillableEmail(),
-                'card_last4' => $card->last4,
-                'card_type' => $card->cardType,
-            ]);
-            
-            // return to billing page
-            $request->session()->flash('alert-success', trans('cashier::messages.braintree.connected'));
+            // Redirect to my subscription page
             return redirect()->away($this->getReturnUrl($request));
         }
         
-        return view('cashier::braintree.connect', [
+        return view('cashier::braintree.fix_payment', [
+            'subscription' => $subscription,
+            'return_url' => $this->getReturnUrl($request),
             'service' => $service,
             'clientToken' => $service->serviceGateway->clientToken()->generate(),
-            'cardInfo' => $card,
+        ]);
+    }
+
+    /**
+     * Payment redirecting.
+     *
+     * @param \Illuminate\Http\Request $request
+     *
+     * @return \Illuminate\Http\Response
+     **/
+    public function paymentRedirect(Request $request)
+    {
+        return view('cashier::braintree.payment_redirect', [
+            'redirect' => $request->redirect,
         ]);
     }
 }

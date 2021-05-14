@@ -8,8 +8,13 @@ use Stripe\Token as StripeToken;
 use Stripe\Customer as StripeCustomer;
 use Stripe\Subscription as StripeSubscription;
 use Worker\Cashier\Interfaces\PaymentGatewayInterface;
+use Worker\Cashier\Subscription;
+use Worker\Cashier\SubscriptionParam;
+use Worker\Cashier\InvoiceParam;
 use Carbon\Carbon;
 use Worker\Cashier\Cashier;
+use Worker\Cashier\SubscriptionTransaction;
+use Worker\Cashier\SubscriptionLog;
 
 class StripePaymentGateway implements PaymentGatewayInterface
 {
@@ -43,7 +48,7 @@ class StripePaymentGateway implements PaymentGatewayInterface
     {
         try {
             \Stripe\Customer::all(['limit' => 1]);
-        } catch (\Stripe\Error\Card $e) {
+        } catch(\Stripe\Error\Card $e) {
             // Since it's a decline, \Stripe\Error\Card will be caught
         } catch (\Stripe\Error\RateLimit $e) {
             // Too many requests made to the API too quickly
@@ -64,46 +69,47 @@ class StripePaymentGateway implements PaymentGatewayInterface
     }
 
     /**
-     * Check invoice for paying.
+     * Create a new subscription.
      *
+     * @param  Customer                $customer
+     * @param  Subscription         $subscription
      * @return void
      */
-    public function charge($invoice)
+    public function create($customer, $plan)
     {
-        try {
-            // charge invoice
-            $this->doCharge($invoice->customer, [
-                'amount' => $invoice->total(),
-                'currency' => $invoice->currency->code,
-                'description' => trans('messages.pay_invoice', [
-                    'id' => $invoice->uid,
-                ]),
-            ]);
-        } catch (\Stripe\Exception\CardException $e) {
-            // pay failed
-            $invoice->payFailed($e->getError()->message);
-            return;
-        } catch (\Exception $e) {
-            // pay failed
-            $invoice->payFailed($e->getMessage());
-            return;
-        }
+        // update subscription model
+        if ($customer->subscription) {
+            $subscription = $customer->subscription;
+        } else {
+            $subscription = new Subscription();
+            $subscription->user_id = $customer->getBillableId();
+        } 
+        // @todo when is exactly started at?
+        $subscription->started_at = \Carbon\Carbon::now();
 
-        // pay invoice
-        $invoice->fulfill();
+        // set gateway
+        $subscription->gateway = 'stripe';
+        
+        $subscription->user_id = $customer->getBillableId();
+        $subscription->plan_id = $plan->getBillableId();
+        $subscription->status = Subscription::STATUS_NEW;
+        
+        $subscription->save();
+        
+        return $subscription;
     }
     
     /**
      * Charge customer with subscription.
      *
      * @param  Customer                $customer
+     * @param  Subscription         $subscription
      * @return void
      */
-    public function doCharge($customer, $data)
-    {
+    public function charge($subscription, $data) {
         // get or create plan
-        $stripeCustomer = $this->getStripeCustomer($customer);
-        $card = $this->getCardInformation($customer);
+        $stripeCustomer = $this->getStripeCustomer($subscription->user);
+        $card = $this->getCardInformation($subscription->user);
 
         if (!is_object($card)) {
             throw new \Exception('Can not find card information');
@@ -119,8 +125,10 @@ class StripePaymentGateway implements PaymentGatewayInterface
         ]);
     }
 
-    public function supportsAutoBilling()
-    {
+    public function sync($subscription) {
+    }
+
+    public function isSupportRecurring() {
         return true;
     }
 
@@ -129,28 +137,34 @@ class StripePaymentGateway implements PaymentGatewayInterface
      *
      * @return string
      */
-    public function getCheckoutUrl($invoice, $returnUrl='/')
-    {
+    public function getCheckoutUrl($subscription, $returnUrl='/') {
         return \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\StripeController@checkout", [
-            'invoice_uid' => $invoice->uid,
+            'subscription_id' => $subscription->uid,
             'return_url' => $returnUrl,
         ]);
     }
 
     /**
-     * Get user has card.
+     * Get change plan url.
      *
      * @return string
      */
-    public function hasCard($customer)
-    {
-        return is_object($this->getCardInformation($customer));
+    public function getChangePlanUrl($subscription, $plan_id, $returnUrl='/') {
+        return \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\StripeController@changePlan", [
+            'subscription_id' => $subscription->uid,
+            'return_url' => $returnUrl,
+            'plan_id' => $plan_id,
+        ]);
+    }
+
+    public function getRenewUrl($subscription, $returnUrl='/') {
+        return false;
     }
 
     /**
      * Get card information from Stripe user.
      *
-     * @param  User    $user
+     * @param  Subscription    $subscription
      * @return Boolean
      */
     public function getCardInformation($user)
@@ -162,13 +176,13 @@ class StripePaymentGateway implements PaymentGatewayInterface
             ['object' => 'card']
         );
 
-        return empty($cards->data) ? null : $cards->data["0"];
+        return empty($cards->data) ? NULL : $cards->data["0"];
     }
 
     /**
      * Get the Stripe customer instance for the current user and token.
      *
-     * @param  User    $user
+     * @param  SubscriptionParam    $subscriptionParam
      * @return \Stripe\Customer
      */
     protected function getStripeCustomer($user)
@@ -267,15 +281,205 @@ class StripePaymentGateway implements PaymentGatewayInterface
         return $price / $rate;
     }
 
+    public function renew($subscription) {
+        // add transaction
+        $transaction = $subscription->addTransaction(SubscriptionTransaction::TYPE_AUTO_CHARGE, [
+            'ends_at' => null,
+            'current_period_ends_at' => $subscription->nextPeriod(),
+            'status' => SubscriptionTransaction::STATUS_PENDING,
+            'title' => trans('cashier::messages.transaction.recurring_charge', [
+                'plan' => $subscription->plan->getBillableName(),
+            ]),
+            'amount' => $subscription->plan->getBillableFormattedPrice(),
+        ]);
+
+        // charge
+        try {
+            $this->charge($subscription, [
+                'amount' => $subscription->plan->getBillableAmount(),
+                'currency' => $subscription->plan->getBillableCurrency(),
+                'description' => trans('cashier::messages.transaction.recurring_charge', [
+                    'plan' => $subscription->plan->getBillableName(),
+                ]),
+            ]);
+
+            // set active
+            $transaction->setSuccess();
+
+            // check new states from transaction
+            $subscription->ends_at = $transaction->ends_at;
+            // save last period
+            $subscription->last_period_ends_at = $subscription->current_period_ends_at;
+            // set new current period
+            $subscription->current_period_ends_at = $transaction->current_period_ends_at;
+            $subscription->save();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_RENEWED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+            ]);
+
+            return true;
+        } catch(\Stripe\Exception\CardException $e) {
+            // // Since it's a decline, \Stripe\Exception\CardException will be caught
+            // echo 'Status is:' . $e->getHttpStatus() . '\n';
+            // echo 'Type is:' . $e->getError()->type . '\n';
+            // echo 'Code is:' . $e->getError()->code . '\n';
+            // // param is '' in this case
+            // echo 'Param is:' . $e->getError()->param . '\n';
+            // echo 'Message is:' . $e->getError()->message . '\n';
+
+            $transaction->setFailed();
+
+            // update error message
+            $transaction->description = $e->getError()->message;
+            $transaction->save();
+
+            // set subscription last_error_type
+            $subscription->error = json_encode([
+                'status' => 'error',
+                'type' => 'renew',
+                'error' => $e->getError(),
+                'message' => trans('cashier::messages.renew.card_error', [
+                    'date' => $subscription->current_period_ends_at,
+                    'error' => $e->getError()->message,
+                    'link' => \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\\StripeController@fixPayment", [
+                        'subscription_id' => $subscription->uid,
+                        'return_url' => \Worker\Cashier\Cashier::lr_action('AccountSubscriptionController@index'),
+                    ]),
+                ]),
+            ]);
+            $subscription->save();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_RENEW_FAILED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+                'error' => json_encode($e->getError()),
+            ]);
+
+            return false;
+         } catch (\Exception $e) {
+            $transaction->setFailed();
+
+            // update error message
+            $transaction->description = $e->getMessage();
+            $transaction->save();
+
+            // set subscription last_error_type
+            $subscription->error = json_encode([
+                'status' => 'error',
+                'type' => 'renew',
+                'message' => trans('cashier::messages.renew.error', [
+                    'date' => $subscription->current_period_ends_at,
+                    'link' => \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\\StripeController@fixPayment", [
+                        'subscription_id' => $subscription->uid,
+                        'return_url' => \Worker\Cashier\Cashier::lr_action('AccountSubscriptionController@index'),
+                    ]),
+                ]),
+            ]);
+            $subscription->save();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_RENEW_FAILED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
     /**
-     * Get connect url.
+     * Get last transaction
+     *
+     * @return boolean
+     */
+    public function getLastTransaction($subscription) {
+        return $subscription->subscriptionTransactions()
+            ->where('type', '<>', SubscriptionLog::TYPE_SUBSCRIBE)
+            ->orderBy('created_at', 'desc')
+            ->first();
+    }
+
+    /**
+     * Cancel subscription.
      *
      * @return string
      */
-    public function getConnectUrl($returnUrl='/')
-    {
-        return \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\StripeController@connect", [
-            'return_url' => $returnUrl,
+    public function cancel($subscription) {
+        $subscription->cancel();
+
+        // add log
+        $subscription->addLog(SubscriptionLog::TYPE_CANCELLED, [
+            'plan' => $subscription->plan->getBillableName(),
+            'price' => $subscription->plan->getBillableFormattedPrice(),
         ]);
+    }
+
+    /**
+     * Cancel now subscription.
+     *
+     * @return string
+     */
+    public function cancelNow($subscription) {
+        $subscription->cancelNow();
+
+        // add log
+        $subscription->addLog(SubscriptionLog::TYPE_CANCELLED_NOW, [
+            'plan' => $subscription->plan->getBillableName(),
+            'price' => $subscription->plan->getBillableFormattedPrice(),
+        ]);
+    }
+
+    /**
+     * Resume now subscription.
+     *
+     * @return string
+     */
+    public function resume($subscription) {
+        $subscription->resume();
+
+        // add log
+        $subscription->addLog(SubscriptionLog::TYPE_RESUMED, [
+            'plan' => $subscription->plan->getBillableName(),
+            'price' => $subscription->plan->getBillableFormattedPrice(),
+        ]);
+    }
+
+    /**
+     * Gateway check method.
+     *
+     * @return void
+     */
+    public function check($subscription)
+    {
+        // check expired
+        if ($subscription->isExpired()) {
+            $subscription->cancelNow();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_EXPIRED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+            ]);
+        }
+        
+        // check from service: recurring/transaction
+        if ($subscription->isRecurring() && $subscription->isExpiring()) {
+            $this->renew($subscription);
+        }
+    }
+
+    /**
+     * Check if use remote subscription.
+     *
+     * @return void
+     */
+    public function useRemoteSubscription()
+    {
+        return false;
     }
 }

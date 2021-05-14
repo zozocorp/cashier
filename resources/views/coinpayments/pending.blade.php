@@ -26,29 +26,22 @@
         <div class="col-md-8">
             <label></label>  
             <h2 class="mt-0">
-                {{ $invoice->title }}
+                {{ $subscription->plan->getBillableName() }}
+                ({{ $subscription->plan->getBillableFormattedPrice() }})
             </h2>
 
-            <p>{!! trans('cashier::messages.coinpayments.pending.intro') !!}
+            <p>{!! trans('cashier::messages.coinpayments.pending.intro', [
+                'plan' => $subscription->plan->getBillableName(),
+            ]) !!}</p>
                 
             <ul class="dotted-list topborder section mb-4">
-                <li>
-                    <div class="unit size1of3 font-weight-bold">
-                        {{ trans('cashier::messages.coinpayments.status_code') }}
-                    </div>
-                    <div class="lastUnit size2of3">
-                        <mc:flag>
-                            {{ $invoice->getMetadata()['status'] }}
-                        </mc:flag>
-                    </div>
-                </li>
                 <li>
                     <div class="unit size1of3 font-weight-bold">
                         {{ trans('cashier::messages.coinpayments.status') }}
                     </div>
                     <div class="lastUnit size2of3">
                         <mc:flag>
-                            {{ $invoice->getMetadata()['status_text'] }}
+                            {{ $transaction->getMetadata()['remote']['status_text'] }}
                         </mc:flag>
                     </div>
                 </li>
@@ -57,7 +50,15 @@
                         {{ trans('cashier::messages.coinpayments.plan') }}
                     </div>
                     <div class="lastUnit size2of3">
-                        <mc:flag>{{ $invoice->title }}</mc:flag>
+                        <mc:flag>{{ $subscription->plan->getBillableName() }}</mc:flag>
+                    </div>
+                </li>
+                <li>
+                    <div class="unit size1of3 font-weight-bold">
+                        {{ trans('cashier::messages.coinpayments.next_period_day') }}
+                    </div>
+                    <div class="lastUnit size2of3">
+                        <mc:flag>{{ $transaction->current_period_ends_at }}</mc:flag>
                     </div>
                 </li>
                 <li>
@@ -65,7 +66,7 @@
                         {{ trans('cashier::messages.coinpayments.amount') }}
                     </div>
                     <div class="lastUnit size2of3">
-                        <mc:flag>{{ $invoice->total() }} {{ $service->receive_currency }}</mc:flag>
+                        <mc:flag>{{ $transaction->amount }}</mc:flag>
                     </div>
                 </li>
                 <li>
@@ -77,8 +78,8 @@
                             <a target="_blank" style="white-space: nowrap;
 overflow: hidden;
 text-overflow: ellipsis;
-display: block;" href="{{ $invoice->getMetadata()['checkout_url'] }}">
-                                {{ $invoice->getMetadata()['checkout_url'] }}
+display: block;" href="{{ $transaction->getMetadata()['checkout_url'] }}">
+                                {{ $transaction->getMetadata()['checkout_url'] }}
                             </a>
                         </mc:flag>
                     </div>
@@ -92,29 +93,14 @@ display: block;" href="{{ $invoice->getMetadata()['checkout_url'] }}">
                             <a target="_blank" style="white-space: nowrap;
 overflow: hidden;
 text-overflow: ellipsis;
-display: block;" href="{{ $invoice->getMetadata()['status_url'] }}">
-                                {{ $invoice->getMetadata()['status_url'] }}
+display: block;" href="{{ $transaction->getMetadata()['status_url'] }}">
+                                {{ $transaction->getMetadata()['status_url'] }}
                             </a>
                         </mc:flag>
                     </div>
                 </li>
             </ul> 
-
-            <div class="my-4">
-                <hr>
-                <a class="" link-method="POST" link-confirm="{{ trans('messages.invoice.cancel.confirm') }}"
-                    href="{{ action('AccountSubscriptionController@cancelInvoice', [
-                        'invoice_uid' => $invoice->uid,
-                    ]) }}">
-                    {{ trans('messages.subscription.cancel_now_change_other_plan') }}
-                </a>
-            </div>
         </div>
         <div class="col-md-2"></div>
-        <div class="col-md-4">
-            @include('invoices.bill', [
-                'bill' => $invoice->getBillingInfo(),
-            ])
-        </div>
     </div>
 @endsection

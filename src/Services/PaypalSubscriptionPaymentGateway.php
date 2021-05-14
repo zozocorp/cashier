@@ -4,7 +4,12 @@ namespace Worker\Cashier\Services;
 
 use Worker\Cashier\Cashier;
 use Worker\Cashier\Interfaces\PaymentGatewayInterface;
+use Worker\Cashier\Subscription;
+use Worker\Cashier\SubscriptionParam;
+use Worker\Cashier\InvoiceParam;
 use Carbon\Carbon;
+use Worker\Cashier\SubscriptionTransaction;
+use Worker\Cashier\SubscriptionLog;
 
 class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
 {
@@ -72,11 +77,11 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
             'Authorization' => 'Bearer ' . $this->getAccessToken(),
         ], [
             "name" => 'ACELLE_' . uniqid(),
-            "description" => 'Acelle-PayPal',
+            "description" => 'Worker-PayPal',
             "type" => "SERVICE",
             "category" => "SOFTWARE",
             "image_url" => "https://previews.customer.envatousercontent.com/files/224717199/Square80.png",
-            "home_url" => 'https://acellemail.com',
+            "home_url" => 'https://emamail.com',
         ]);
         
         // update data
@@ -120,10 +125,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
     {
         if (!isset($this->accessToken)) {
             // Get new one if not exist
-            $data = $this->request(
-                'POST',
-                '/v1/oauth2/token',
-                [
+            $data = $this->request('POST', '/v1/oauth2/token', [
                     'Accept' => 'application/json',
                     'Accept-Language' => 'en_US',
                     'Content-Type' => 'application/x-www-form-urlencoded',
@@ -282,7 +284,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
               "email_address": "' . $subscription->user->getBillableEmail() . '"
             },
             "application_context": {
-              "brand_name": "Acelle/Cashier",
+              "brand_name": "Worker/Cashier",
               "locale": "en-US",
               "shipping_preference": "SET_PROVIDED_ADDRESS",
               "user_action": "SUBSCRIBE_NOW",
@@ -356,8 +358,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         ]);
     }
 
-    public function renew($subscription)
-    {
+    public function renew($subscription) {
         // save last period
         $subscription->last_period_ends_at = $subscription->current_period_ends_at;
         // set new current period
@@ -619,7 +620,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         if ($data && isset($data["transactions"])) {
             foreach ($data["transactions"] as $transaction) {
                 $exist = $subscription->subscriptionTransactions()
-                    ->where('description', '=', 'RemoteID: ' . $transaction['id'])
+                    ->where('description','=', 'RemoteID: ' . $transaction['id'])
                     ->first();
 
                 if (!is_object($exist)) {
@@ -673,10 +674,11 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
                 $data = $this->getPayPalPlanById($connection['paypal_id']);
 
                 // update price
-                if ($data['billing_cycles'][0]['pricing_scheme']['fixed_price']['value']) {
+                if($data['billing_cycles'][0]['pricing_scheme']['fixed_price']['value']) {
                     $plan->price = $data['billing_cycles'][0]['pricing_scheme']['fixed_price']['value'];
                     $plan->save();
                 }
+
             } catch (\GuzzleHttp\Exception\ClientException $e) {
                 $response = json_decode($e->getResponse()->getBody()->getContents(), true);
                 
@@ -700,6 +702,16 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      */
     public function check($subscription)
     {
+        // check expired
+        if ($subscription->isExpired()) {
+            $subscription->cancelNow();
+
+            // add log
+            $subscription->addLog(SubscriptionLog::TYPE_EXPIRED, [
+                'plan' => $subscription->plan->getBillableName(),
+                'price' => $subscription->plan->getBillableFormattedPrice(),
+            ]);
+        }
 
         // check remote status
         if (!$subscription->isEnded()) {
@@ -732,7 +744,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      * @return void
      */
     public function getPaypalSubscriptionById($subscriptionID)
-    {
+    {        
         return $this->request('GET', '/v1/billing/subscriptions/' . $subscriptionID, [
             'Content-Type' => 'application/json',
             'Authorization' => 'Bearer ' . $this->getAccessToken(),
@@ -795,7 +807,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         try {
             $response = $this->getAccessToken();
         } catch (\Exception $e) {
-            throw new \Exception($e->getMessage());
+            throw new \Exception($e->getMessage());           
         }
 
         if (!$this->getData()['product_id']) {
@@ -820,9 +832,12 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         } else {
             $subscription = new Subscription();
             $subscription->user_id = $customer->getBillableId();
-        }
+        } 
         // @todo when is exactly started at?
         $subscription->started_at = \Carbon\Carbon::now();
+
+        // set gateway
+        $subscription->gateway = 'paypal_subscription';
         
         $subscription->user_id = $customer->getBillableId();
         $subscription->plan_id = $plan->getBillableId();
@@ -832,12 +847,6 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         $subscription->ends_at = null;
         $subscription->current_period_ends_at = $subscription->getPeriodEndsAt(Carbon::now());
         $subscription->save();
-
-        // set gateway
-        $customer->updatePaymentMethod([
-            'method' => 'paypal_subscription',
-            'user_id' => $customer->getBillableEmail(),
-        ]);
         
         // If plan is free: enable subscription & update transaction
         if ($plan->getBillableAmount() == 0) {
@@ -970,8 +979,9 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         print "Order ID: {$response->result->id}\n";
         print "Intent: {$response->result->intent}\n";
         print "Links:\n";
-        foreach ($response->result->links as $link) {
-            print "\t{$link->rel}: {$link->href}\tCall Type: {$link->method}\n";
+        foreach($response->result->links as $link)
+        {
+        print "\t{$link->rel}: {$link->href}\tCall Type: {$link->method}\n";
         }
         // 4. Save the transaction in your database. Implement logic to save transaction to your database for future reference.
         print "Gross Amount: {$response->result->purchase_units[0]->amount->currency_code} {$response->result->purchase_units[0]->amount->value}\n";
@@ -984,6 +994,83 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
             throw new \Exception('Something went wrong:' . json_encode($response->result));
         }
     }
+    
+    /**
+     * Get subscription invoices.
+     *
+     * @param  Int  $subscriptionId
+     * @return date
+     */
+    public function getInvoices($subscription)
+    {
+        $invoices = [];     
+        
+        foreach($this->getTransactions($subscription) as $transaction) {
+            $invoices[] = new InvoiceParam([
+                'createdAt' => $transaction['createdAt'],
+                'periodEndsAt' => $transaction['periodEndsAt'],
+                'amount' => $transaction['amount'],
+                'description' => $transaction['description'],
+                'status' => $transaction['status'],
+            ]);
+        }
+        
+        return $invoices;
+    }
+    
+    /**
+     * Get subscription raw invoices.
+     *
+     * @param  Int  $subscriptionId
+     * @return date
+     */
+    public function getRawInvoices($subscription)
+    {
+        $invoices = [];
+
+        foreach($this->getTransactions($subscription) as $transaction) {
+            $invoices[] = new InvoiceParam([
+                'createdAt' => $transaction['createdAt'],
+                'periodEndsAt' => $transaction['periodEndsAt'],
+                'amount' => $transaction['amount'],
+                'description' => $transaction['description'],
+                'status' => $transaction['status'],
+            ]);
+        }
+        
+        return $invoices;
+    }
+    
+    // /**
+    //  * Check for notice.
+    //  *
+    //  * @param  Subscription  $subscription
+    //  * @return date
+    //  */
+    // public function hasPending($subscription)
+    // {
+    //     $transaction = $this->getLastTransaction($subscription);
+    //     return $transaction && $transaction->isPending() && !in_array($transaction->type, [
+    //         SubscriptionTransaction::TYPE_SUBSCRIBE,
+    //     ]);
+    // }
+    
+    // /**
+    //  * Get notice message.
+    //  *
+    //  * @param  Subscription  $subscription
+    //  * @return date
+    //  */
+    // public function getPendingNotice($subscription)
+    // {
+    //     $transaction = $this->getLastTransaction($subscription);
+        
+    //     return trans('cashier::messages.paypal_subscription.has_transaction_pending', [
+    //         'description' => $transaction->title,
+    //         'amount' => $transaction->amount,
+    //         'url' => $this->getTransactionPendingUrl($subscription, \Worker\Cashier\Cashier::lr_action('AccountSubscriptionController@index')),
+    //     ]);
+    // }
     
     /**
      * Get renew url.
@@ -1003,8 +1090,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return string
      */
-    public function getCheckoutUrl($subscription, $returnUrl='/')
-    {
+    public function getCheckoutUrl($subscription, $returnUrl='/') {
         return \Worker\Cashier\Cashier::lr_action("\Worker\Cashier\Controllers\PaypalSubscriptionController@checkout", [
             'subscription_id' => $subscription->uid,
             'return_url' => $returnUrl,
@@ -1069,21 +1155,34 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return boolean
      */
-    public function getLastTransaction($subscription)
-    {
+    public function getLastTransaction($subscription) {
         return $subscription->subscriptionTransactions()
             ->where('type', '<>', SubscriptionLog::TYPE_SUBSCRIBE)
             ->orderBy('created_at', 'desc')
             ->first();
     }
 
+    // /**
+    //  * Check if has failed transaction
+    //  *
+    //  * @return boolean
+    //  */
+    // public function hasError($subscription) {
+    //     $transaction = $this->getLastTransaction($subscription);
+
+    //     return isset($subscription->last_error_type) && $transaction->isFailed();
+    // }
+
+    // public function getErrorNotice($subscription) {
+    //     return trans('cashier::messages.paypal_subscription.error.something_went_wrong');
+    // }
+
     /**
      * Cancel subscription.
      *
      * @return string
      */
-    public function cancel($subscription)
-    {
+    public function cancel($subscription) {
         $subscription->cancel();
 
         // remote suspend
@@ -1101,8 +1200,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return string
      */
-    public function cancelNow($subscription)
-    {
+    public function cancelNow($subscription) {
         $this->cancelPaypalSubscription($subscription);
 
         $subscription->cancelNow();
@@ -1119,8 +1217,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return string
      */
-    public function setExpired($subscription)
-    {
+    public function setExpired($subscription) {
         $subscription->cancelNow();
 
         // add log
@@ -1135,8 +1232,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return string
      */
-    public function resume($subscription)
-    {
+    public function resume($subscription) {
         $subscription->resume();
 
         // activate paypal subscription
@@ -1154,8 +1250,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
      *
      * @return boolean
      */
-    public function getInitTransaction($subscription)
-    {
+    public function getInitTransaction($subscription) {
         return $subscription->subscriptionTransactions()
             ->where('type', '=', SubscriptionTransaction::TYPE_SUBSCRIBE)
             ->orderBy('created_at', 'desc')
@@ -1188,7 +1283,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
         // Amount per day of current plan/period
         $currentPerDayAmount = ($currentAmount/$periodDays);
 
-        // remain amount cusomter not use
+        // remain amount cusomter not use        
         $remainAmount = $currentPerDayAmount*$remainDays;
 
         // new amount of new plan
@@ -1208,6 +1303,16 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
             'amount' => round($amount, 2),
             'ends_at' => $subscription->getPeriodEndsAt($subscription->current_period_ends_at),
         ];
+    }
+
+    /**
+     * Check if use remote subscription.
+     *
+     * @return void
+     */
+    public function useRemoteSubscription()
+    {
+        return true;
     }
 
     /**
@@ -1286,7 +1391,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
                     "tenure_type" => "REGULAR",
                     "sequence" => 1,
                     "total_cycles" => 12,
-                    "pricing_scheme" => [
+                    "pricing_scheme" => [                        
                         "fixed_price" => [
                             "value" => $plan->getBillableAmount(),
                             "currency_code" => $plan->getBillableCurrency(),
@@ -1396,7 +1501,7 @@ class PaypalSubscriptionPaymentGateway implements PaymentGatewayInterface
               "email_address": "' . $subscription->user->getBillableEmail() . '"
             },
             "application_context": {
-              "brand_name": "Acelle/Cashier",
+              "brand_name": "Worker/Cashier",
               "locale": "en-US",
               "shipping_preference": "SET_PROVIDED_ADDRESS",
               "user_action": "SUBSCRIBE_NOW",
