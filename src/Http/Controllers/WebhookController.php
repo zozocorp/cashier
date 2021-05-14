@@ -4,10 +4,10 @@ namespace Worker\Cashier\Http\Controllers;
 
 use Exception;
 use Illuminate\Http\Request;
-use Laravel\Cashier\Cashier;
+use Worker\Cashier\Cashier;
 use Illuminate\Support\Carbon;
 use Stripe\Event as StripeEvent;
-use Laravel\Cashier\Subscription;
+use Worker\Cashier\Subscription;
 use Illuminate\Routing\Controller;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -166,7 +166,7 @@ class WebhookController extends Controller
      * Get the billable entity instance by Stripe ID.
      *
      * @param  string  $stripeId
-     * @return \Laravel\Cashier\Billable
+     * @return \Worker\Cashier\Billable
      */
     protected function getUserByStripeId($stripeId)
     {
